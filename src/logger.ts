@@ -216,6 +216,19 @@ export class Logger {
   }
 
   /**
+   * Get the current log level
+   */
+  get level(): Level {
+    return this.logger.level as Level;
+  }
+
+  /**
+   * Set the log level
+   */
+  set level(level: Level) {
+    this.logger.level = level;
+  }
+  /**
    * Create a child logger with additional bindings
    */
   child(bindings: Record<string, any>): Logger {
