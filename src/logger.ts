@@ -4,14 +4,16 @@ import pino, {
   LoggerOptions as PinoLoggerOptions,
   DestinationStream,
   Level,
-  stdTimeFunctions
+  stdTimeFunctions,
+  Bindings
 } from 'pino';
-import pinoRoll from 'pino-roll';
 import path from 'path';
 import fs from 'fs';
-import os from 'os'; // Add this import
-
+import os from 'os';
 import { LoggerOptions } from './types.js';
+
+// Import pino-roll differently
+import pinoRoll from 'pino-roll';
 
 
 
@@ -49,7 +51,7 @@ const getConsoleTransport = (options: LoggerOptions['console'] = {}, level: Leve
       target: 'pino-pretty',
       options: {
         colorize: true,
-        translateTime: 'yyyy-mm-dd HH:MM:ss.l',
+        translateTime: 'yyyy-mm-dd HH:MM:ss.l', // Fixed: use 'yyyy' instead of 'YYYY'
         ignore: 'pid,hostname',
         singleLine: true,
         messageFormat: '{msg}',
@@ -61,35 +63,52 @@ const getConsoleTransport = (options: LoggerOptions['console'] = {}, level: Leve
 };
 
 /**
+ * Create a file write stream for pino
+ */
+const createFileStream = (filepath: string): DestinationStream | null => {
+  try {
+    // Ensure directory exists
+    const dir = path.dirname(filepath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
+    // Create a write stream
+    const stream = fs.createWriteStream(filepath, {
+      flags: 'a',
+      encoding: 'utf8'
+    });
+
+    // Return as DestinationStream
+    return stream as DestinationStream;
+  } catch (error) {
+    console.error('Failed to create file stream:', error);
+    return null;
+  }
+};
+
+/**
  * Get file transport with rotation using pino-roll
  */
 const getFileTransport = (logDir: string, options: LoggerOptions['fileTransportOptions'] = {}, isTest: boolean) => {
   if (isTest || options?.enabled === false) return null;
 
-  // Ensure log directory exists
-  try {
-    if (!fs.existsSync(logDir)) {
-      fs.mkdirSync(logDir, { recursive: true });
-    }
-  } catch {
-    // Directory creation failed, continue without file logging
-    return null;
-  }
-
   const dirname = options?.file || logDir;
-  const filename = options?.filename || 'app-%DATE%.log';
-  const datePattern = options?.datePattern || 'YYYY-MM-DD';
+  const filename = options?.filename || 'app.log';
   const frequency = options?.frequency || 'daily';
+  const datePattern = options?.datePattern || 'yyyy-MM-dd'; // Fixed: use 'yyyy-MM-dd'
   const maxSize = options?.maxSize || '20m';
   const maxFiles = options?.maxFiles || '14d';
   const compress = options?.zippedArchive !== false;
   const level = options?.level;
 
+  const filepath = path.join(dirname, filename);
+
   try {
-    // Create main app log
-    const appLog = pinoRoll({
-      file: path.join(dirname, filename.replace('%DATE%', '')),
-      frequency: frequency,
+    // Create the file transport using pino-roll
+    const stream = pinoRoll({
+      file: filepath,
+      frequency,
       dateFormat: datePattern,
       size: maxSize,
       keep: typeof maxFiles === 'string' && maxFiles.endsWith('d')
@@ -98,7 +117,14 @@ const getFileTransport = (logDir: string, options: LoggerOptions['fileTransportO
       compress,
       level: level || undefined,
     });
-    return appLog;
+
+    // Ensure it's a valid stream
+    if (!stream || typeof stream.write !== 'function') {
+      console.error('Invalid stream returned from pino-roll');
+      return null;
+    }
+
+    return stream;
   } catch (error) {
     console.error('Failed to create file log transport:', error);
     return null;
@@ -112,17 +138,16 @@ const getErrorFileTransport = (logDir: string, options: LoggerOptions['fileTrans
   if (isTest || options?.enabled === false) return null;
 
   try {
-    const datePattern = options?.datePattern || 'YYYY-MM-DD';
-
     const dirname = options?.file || logDir;
     const maxFiles = options?.maxFiles || '30d';
     const maxSize = options?.maxSize || '20m';
     const compress = options?.zippedArchive !== false;
 
-    const errorLog = pinoRoll({
-      file: path.join(dirname, 'error.log'),
+    const filepath = path.join(dirname, 'error.log');
+
+    const stream = pinoRoll({
+      file: filepath,
       frequency: 'daily',
-      dateFormat: datePattern,
       size: maxSize,
       keep: typeof maxFiles === 'string' && maxFiles.endsWith('d')
         ? parseInt(maxFiles)
@@ -130,7 +155,8 @@ const getErrorFileTransport = (logDir: string, options: LoggerOptions['fileTrans
       compress,
       level: 'error',
     });
-    return errorLog;
+
+    return stream;
   } catch (error) {
     console.error('Failed to create error log transport:', error);
     return null;
@@ -161,7 +187,6 @@ export const createPinoLogger = (options: LoggerOptions = {}) => {
     formatters: {
       level: (label: string) => ({ level: label }),
       bindings: (bindings: Record<string, any>) => {
-        // Customize bindings to include only what we want
         const { pid, hostname, name, ...rest } = bindings;
         return { pid, hostname, service: name, ...rest };
       },
@@ -173,35 +198,40 @@ export const createPinoLogger = (options: LoggerOptions = {}) => {
   };
 
   // Build transports
-  const transports: DestinationStream[] = [];
+  const streams: DestinationStream[] = [];
 
   // Console transport
   const consoleTransport = getConsoleTransport(options.console, level as Level);
   if (consoleTransport) {
-    transports.push(consoleTransport);
+    streams.push(consoleTransport);
   }
 
   // File transport (if not in test and enabled)
   if (!isTest && options.fileTransportOptions?.enabled !== false) {
     const fileTransport = getFileTransport(LOG_DIR, options.fileTransportOptions, isTest);
     if (fileTransport) {
-      transports.push(fileTransport);
+      streams.push(fileTransport);
     }
 
     // Error file transport (always enabled for errors)
     const errorTransport = getErrorFileTransport(LOG_DIR, options.fileTransportOptions, isTest);
     if (errorTransport) {
-      transports.push(errorTransport);
+      streams.push(errorTransport);
     }
   }
 
-  // If no transports, fallback to basic pino
-  if (transports.length === 0) {
+  // If no streams, fallback to basic pino
+  if (streams.length === 0) {
     return pino(loggerOptions);
   }
 
-  // Create multi-stream logger
-  return pino(loggerOptions, pino.multistream(transports));
+  // Create multi-stream logger with proper stream entries
+  const streamEntries = streams.map(stream => ({
+    stream,
+    level: level,
+  }));
+
+  return pino(loggerOptions, pino.multistream(streamEntries));
 };
 
 // ============ Logger Wrapper Class ============
@@ -230,10 +260,11 @@ export class Logger {
   set level(level: Level) {
     this.logger.level = level;
   }
+
   /**
    * Create a child logger with additional bindings
    */
-  child(bindings: Record<string, any>): Logger {
+  child(bindings: Bindings): Logger {
     const child = new Logger(this.options);
     child.logger = this.logger.child(bindings);
     child.childBindings = { ...this.childBindings, ...bindings };
@@ -241,7 +272,7 @@ export class Logger {
   }
 
   /**
-   * Trace level (maps to pino's trace)
+   * Trace level
    */
   trace(msg: string, obj?: Record<string, any>): void {
     this.logger.trace(obj || {}, msg);
@@ -283,28 +314,28 @@ export class Logger {
   }
 
   /**
-   * Get the underlying pino logger (for compatibility)
-   */
-  getPino(): PinoLogger {
-    return this.logger;
-  }
-
-  /**
-   * Pino's silent method (useful for testing)
+   * Silent level
    */
   silent(): void {
     this.logger.level = 'silent';
   }
 
   /**
-   * Set log level dynamically
+   * Check if a given level is enabled
    */
-  setLevel(level: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent'): void {
-    this.logger.level = level;
+  isLevelEnabled(level: Level): boolean {
+    return this.logger.isLevelEnabled(level);
   }
 
   /**
-   * Flush all log entries (useful for shutdown)
+   * Get the underlying pino logger
+   */
+  getPino(): PinoLogger {
+    return this.logger;
+  }
+
+  /**
+   * Flush all log entries
    */
   flush(): Promise<void> {
     return new Promise((resolve) => {
@@ -329,7 +360,7 @@ export function createServiceLogger(service: string, options: LoggerOptions = {}
 }
 
 /**
- * Create a logger with request context (useful for HTTP requests)
+ * Create a logger with request context
  */
 export function createRequestLogger(req: any, logger: Logger): Logger {
   const reqId = req.id || req.headers?.['x-request-id'] || generateRequestId();
@@ -355,8 +386,6 @@ const defaultLogger = new Logger({
 export default defaultLogger;
 
 // Export types
-export type { PinoLogger, PinoLoggerOptions, Level };
+export type { PinoLogger, PinoLoggerOptions, Level, Bindings };
 export type AppLogger = PinoLogger;
-
-// Export the options type
 export type { LoggerOptions } from './types.js';

@@ -77,7 +77,7 @@ export interface LoggerOptions {
     maxFiles?: number | string;
     /** Whether to compress rotated logs */
     zippedArchive?: boolean;
-    /** Date pattern for rotation (e.g., 'YYYY-MM-DD') */
+    /** Date pattern for rotation (e.g., 'yyyy-MM-DD') */
     datePattern?: string;
     /** Filename pattern */
     filename?: string;
