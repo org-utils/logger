@@ -1,133 +1,223 @@
-import winston from 'winston';
-import 'winston-daily-rotate-file';
+// logger.ts
+import pino, {
+  Logger as PinoLogger,
+  LoggerOptions as PinoLoggerOptions,
+  DestinationStream,
+  Level,
+  stdTimeFunctions
+} from 'pino';
+import pinoRoll from 'pino-roll';
 import path from 'path';
-import fs from 'fs'
-import { Logger as WinstonLogger } from 'winston';
+import fs from 'fs';
 import { LoggerOptions } from './types.js';
-import { DailyRotateFileTransportOptions } from 'winston-daily-rotate-file';
-const { combine, timestamp, printf, colorize, errors, json, splat } = winston.format;
-/**
- * Console format: human-readable, colorized, single line + inline meta.
- * Kept cheap on purpose (no deep pretty-printing) so it stays fast under load.
- */
-const consoleFormat = combine(
-  colorize({ all: true }),
-  timestamp({ format: 'YYYY-MM-DD HH:mm:ss.SSS' }),
-  errors({ stack: true }),
-  splat(),
-  printf(({ level, message, timestamp: ts, reqId, stack, ...meta }) => {
-    const metaKeys = Object.keys(meta).filter((k) => k !== 'service');
-    const metaStr = metaKeys.length
-      ? ' ' + JSON.stringify(meta, null, 0)
-      : '';
-    const reqTag = reqId ? ` [${reqId}]` : '';
-    const base = `${ts} ${level}${reqTag}: ${message}${metaStr}`;
-    return stack ? `${base}\n${stack}` : base;
-  })
-);
+
+
+
+// ============ Pino Configuration ============
 
 /**
- * File format: structured JSON, cheap to parse/ship to log aggregators
- * (ELK, Loki, CloudWatch, etc). No colorization — colors are ANSI noise in files.
+ * Get console transport configuration
  */
-const fileFormat = combine(
-  timestamp(),
-  errors({ stack: true }),
-  splat(),
-  json()
-);
+const getConsoleTransport = (options: LoggerOptions['console'] = {}, level: Level) => {
+  const isProd = process.env.NODE_ENV === 'production';
+  const enabled = options?.enabled !== false;
 
-const transports: winston.transport[] = [];
+  if (!enabled) {
+    return null;
+  }
 
-export const createWinstonLogger = (options: LoggerOptions) => {
-  const service = options.service ?? process.env.SERVICE ?? 'unknown';
-  const { console: consoleOptions ={enabled: true}, fileTransportOptions, environment, defaultMeta: optionsMeta = {}, logDirectory, level } = options
-  const defaultMeta = { service, ...optionsMeta };
+  const consoleLevel = options?.level || level;
+
+  if (isProd || options?.pretty === false) {
+    // Production: JSON lines for log aggregation
+    return pino.transport({
+      target: 'pino/file',
+      options: {
+        destination: 1, // stdout
+        sync: true,
+      },
+    });
+  } else {
+    // Development: pretty printed logs
+    const prettyOptions = typeof options?.pretty === 'object'
+      ? options.pretty
+      : {};
+
+    return pino.transport({
+      target: 'pino-pretty',
+      options: {
+        colorize: true,
+        translateTime: 'yyyy-mm-dd HH:MM:ss.l',
+        ignore: 'pid,hostname',
+        singleLine: true,
+        messageFormat: '{msg}',
+        errorLikeObjectKeys: ['err', 'error'],
+        ...prettyOptions,
+      },
+    });
+  }
+};
+
+/**
+ * Get file transport with rotation using pino-roll
+ */
+const getFileTransport = (logDir: string, options: LoggerOptions['fileTransportOptions'] = {}, isTest: boolean) => {
+  if (isTest || options?.enabled === false) return null;
+
+  // Ensure log directory exists
+  try {
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+    }
+  } catch {
+    // Directory creation failed, continue without file logging
+    return null;
+  }
+
+  const dirname = options?.file || logDir;
+  const filename = options?.filename || 'app-%DATE%.log';
+  const datePattern = options?.datePattern || 'YYYY-MM-DD';
+  const frequency = options?.frequency || 'daily';
+  const maxSize = options?.maxSize || '20m';
+  const maxFiles = options?.maxFiles || '14d';
+  const compress = options?.zippedArchive !== false;
+  const level = options?.level;
+
+  try {
+    // Create main app log
+    const appLog = pinoRoll({
+      file: path.join(dirname, filename.replace('%DATE%', '')),
+      frequency: frequency,
+      dateFormat: datePattern,
+      size: maxSize,
+      keep: typeof maxFiles === 'string' && maxFiles.endsWith('d')
+        ? parseInt(maxFiles)
+        : 14,
+      compress,
+      level: level || undefined,
+    });
+    return appLog;
+  } catch (error) {
+    console.error('Failed to create file log transport:', error);
+    return null;
+  }
+};
+
+/**
+ * Get error file transport
+ */
+const getErrorFileTransport = (logDir: string, options: LoggerOptions['fileTransportOptions'] = {}, isTest: boolean) => {
+  if (isTest || options?.enabled === false) return null;
+
+  try {
+    const datePattern = options?.datePattern || 'YYYY-MM-DD';
+
+    const dirname = options?.file || logDir;
+    const maxFiles = options?.maxFiles || '30d';
+    const maxSize = options?.maxSize || '20m';
+    const compress = options?.zippedArchive !== false;
+
+    const errorLog = pinoRoll({
+      file: path.join(dirname, 'error.log'),
+      frequency: 'daily',
+      dateFormat: datePattern,
+      size: maxSize,
+      keep: typeof maxFiles === 'string' && maxFiles.endsWith('d')
+        ? parseInt(maxFiles)
+        : 30,
+      compress,
+      level: 'error',
+    });
+    return errorLog;
+  } catch (error) {
+    console.error('Failed to create error log transport:', error);
+    return null;
+  }
+};
+
+// ============ Main Logger Creation ============
+
+export const createPinoLogger = (options: LoggerOptions = {}) => {
+  const service = options.service ?? process.env.SERVICE ?? process.env.SERVICE_NAME ?? 'unknown';
+  const environment = options.environment ?? process.env.NODE_ENV ?? 'development';
   const isProd = environment === 'production';
   const isTest = environment === 'test';
-  const LOG_DIR = logDirectory || process.env.LOG_DIR || path.join(process.cwd(), 'logs');
+  const LOG_DIR = options.logDirectory || process.env.LOG_DIR || path.join(process.cwd(), 'logs');
+  const level = options.level || (isProd ? 'info' : 'debug');
 
-  if (consoleOptions?.enabled) {
+  // Base logger options
+  const loggerOptions: PinoLoggerOptions = {
+    name: service,
+    level: level,
+    base: {
+      service,
+      pid: process.pid,
+      hostname: require('os').hostname(),
+      environment,
+      ...options.defaultMeta,
+    },
+    formatters: {
+      level: (label: string) => ({ level: label }),
+      bindings: (bindings: Record<string, any>) => {
+        // Customize bindings to include only what we want
+        const { pid, hostname, name, ...rest } = bindings;
+        return { pid, hostname, service: name, ...rest };
+      },
+    },
+    timestamp: stdTimeFunctions.isoTime,
+    errorKey: 'error',
+    messageKey: 'msg',
+    nestedKey: 'payload',
+  };
 
-  // Console transport - always enabled
-  transports.push(
-    new winston.transports.Console({
-        format: consoleFormat,
-        level: consoleOptions.level,
-      })
-    );
+  // Build transports
+  const transports: DestinationStream[] = [];
+
+  // Console transport
+  const consoleTransport = getConsoleTransport(options.console, level as Level);
+  if (consoleTransport) {
+    transports.push(consoleTransport);
   }
-  // File transports: skip in test env
-  if (!isTest) {
-    // Ensure log directory exists
-    try {
-      if (!fs.existsSync(LOG_DIR)) {
-        fs.mkdirSync(LOG_DIR, { recursive: true });
-      }
-    } catch {
-      // Directory creation failed, but we continue without file logging
+
+  // File transport (if not in test and enabled)
+  if (!isTest && options.fileTransportOptions?.enabled !== false) {
+    const fileTransport = getFileTransport(LOG_DIR, options.fileTransportOptions, isTest);
+    if (fileTransport) {
+      transports.push(fileTransport);
+    }
+
+    // Error file transport (always enabled for errors)
+    const errorTransport = getErrorFileTransport(LOG_DIR, options.fileTransportOptions, isTest);
+    if (errorTransport) {
+      transports.push(errorTransport);
     }
   }
 
-  transports.push(
-    new winston.transports.DailyRotateFile({
-      dirname: fileTransportOptions?.dirname || LOG_DIR,
-      filename: 'app-%DATE%.log',
-      datePattern: 'YYYY-MM-DD',
-      zippedArchive: true,
-      maxSize: '20m',
-      maxFiles: '14d',
-      format: fileFormat,
-    } as DailyRotateFileTransportOptions),
-    new winston.transports.DailyRotateFile({
-      dirname: LOG_DIR,
-      filename: 'error-%DATE%.log',
-      datePattern: 'YYYY-MM-DD',
-      level: 'error',
-      zippedArchive: true,
-      maxSize: '20m',
-      maxFiles: '30d',
-      format: fileFormat,
-      ...(fileTransportOptions || {})
-    } as DailyRotateFileTransportOptions)
-  );
+  // If no transports, fallback to basic pino
+  if (transports.length === 0) {
+    return pino(loggerOptions);
+  }
 
+  // Create multi-stream logger
+  return pino(loggerOptions, pino.multistream(transports));
+};
 
-  // Create the logger instance
-  const logger = winston.createLogger({
-    level: level || (isProd ? 'info' : 'debug'),
-    format: fileFormat,
-    defaultMeta,
-    transports,
-    exitOnError: false,
-
-  });
-
-// Surface transport-level errors
-logger.on('error', (err) => {
-  // eslint-disable-next-line no-console
-  console.error('Logger transport error:', err);
-});
-  return logger
-}
-
-// ============ Logger Wrapper Class (for compatibility) ============
-
+// ============ Logger Wrapper Class ============
 
 export class Logger {
-  private logger: WinstonLogger;
+  private logger: PinoLogger;
   private options: LoggerOptions;
   private childBindings: Record<string, any>;
 
   constructor(options: LoggerOptions = {}) {
     this.options = options;
     this.childBindings = {};
-
-    // Create a child logger with service context
-    const service = options.service || process.env.SERVICE_NAME || 'redis-infrastructure';
-    this.logger = createWinstonLogger(options).child({ service });
+    this.logger = createPinoLogger(options);
   }
 
+  /**
+   * Create a child logger with additional bindings
+   */
   child(bindings: Record<string, any>): Logger {
     const child = new Logger(this.options);
     child.logger = this.logger.child(bindings);
@@ -135,46 +225,123 @@ export class Logger {
     return child;
   }
 
+  /**
+   * Trace level (maps to pino's trace)
+   */
   trace(msg: string, obj?: Record<string, any>): void {
-    this.logger.debug(msg, { ...obj, level: 'trace' });
+    this.logger.trace(obj || {}, msg);
   }
 
+  /**
+   * Debug level
+   */
   debug(msg: string, obj?: Record<string, any>): void {
-    this.logger.debug(msg, obj);
+    this.logger.debug(obj || {}, msg);
   }
 
+  /**
+   * Info level
+   */
   info(msg: string, obj?: Record<string, any>): void {
-    this.logger.info(msg, obj);
+    this.logger.info(obj || {}, msg);
   }
 
+  /**
+   * Warn level
+   */
   warn(msg: string, obj?: Record<string, any>): void {
-    this.logger.warn(msg, obj);
+    this.logger.warn(obj || {}, msg);
   }
 
+  /**
+   * Error level
+   */
   error(msg: string, obj?: Record<string, any>): void {
-    this.logger.error(msg, obj);
+    this.logger.error(obj || {}, msg);
   }
 
+  /**
+   * Fatal level
+   */
   fatal(msg: string, obj?: Record<string, any>): void {
-    this.logger.error(msg, { ...obj, fatal: true });
+    this.logger.fatal({ ...obj, fatal: true }, msg);
   }
 
-  // For Winston compatibility
-  getWinston(): WinstonLogger {
+  /**
+   * Get the underlying pino logger (for compatibility)
+   */
+  getPino(): PinoLogger {
     return this.logger;
   }
-}
-export function createLogger(options: LoggerOptions) {
-  const logDir =
-    options.logDirectory ??
-    path.join(process.cwd(), "logs");
 
+  /**
+   * Pino's silent method (useful for testing)
+   */
+  silent(): void {
+    this.logger.level = 'silent';
+  }
+
+  /**
+   * Set log level dynamically
+   */
+  setLevel(level: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent'): void {
+    this.logger.level = level;
+  }
+
+  /**
+   * Flush all log entries (useful for shutdown)
+   */
+  flush(): Promise<void> {
+    return new Promise((resolve) => {
+      this.logger.flush();
+      setImmediate(resolve);
+    });
+  }
+}
+
+// ============ Factory Functions ============
+
+export function createLogger(options: LoggerOptions = {}): Logger {
+  const logDir = options.logDirectory ?? path.join(process.cwd(), 'logs');
   return new Logger({ ...options, logDirectory: logDir });
 }
 
-// Export the raw Winston logger as well
-const logger = createWinstonLogger({service: process.env.SERVICE_NAME || "unknown"})
-export { logger as winstonLogger };
+/**
+ * Create a logger with a specific service name
+ */
+export function createServiceLogger(service: string, options: LoggerOptions = {}): Logger {
+  return new Logger({ ...options, service });
+}
 
-export type AppLogger = WinstonLogger;
-export default logger;
+/**
+ * Create a logger with request context (useful for HTTP requests)
+ */
+export function createRequestLogger(req: any, logger: Logger): Logger {
+  const reqId = req.id || req.headers?.['x-request-id'] || generateRequestId();
+  return logger.child({
+    reqId,
+    reqMethod: req.method,
+    reqUrl: req.url,
+    reqIp: req.ip || req.headers?.['x-forwarded-for'] || req.connection?.remoteAddress,
+    reqUserAgent: req.headers?.['user-agent'],
+  });
+}
+
+function generateRequestId(): string {
+  return `${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
+}
+
+// ============ Default Export ============
+
+const defaultLogger = new Logger({
+  service: process.env.SERVICE_NAME || process.env.SERVICE || 'unknown',
+});
+
+export default defaultLogger;
+
+// Export types
+export type { PinoLogger, PinoLoggerOptions, Level };
+export type AppLogger = PinoLogger;
+
+// Export the options type
+export type { LoggerOptions } from './types.js';

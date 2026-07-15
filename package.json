@@ -49,18 +49,13 @@
     },
     "./package.json": "./package.json"
   },
-  "peerDependencies": {
-    "winston": "^3.19.0",
-    "winston-daily-rotate-file": "^5.0.0"
-  },
   "devDependencies": {
     "@types/node": "^26.1.1",
-    "@types/winston": "^2.4.4",
     "typescript": "^7.0.2"
   },
   "dependencies": {
-    "winston": "^3.19.0",
-    "winston-daily-rotate-file": "^5.0.0"
+    "pino": "^10.3.1",
+    "pino-roll": "^4.0.0"
   },
   "scripts": {
     "build": "tsc",
