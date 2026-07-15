@@ -1,0 +1,75 @@
+{
+  "name": "@dev_config/logger",
+  "version": "1.0.0",
+  "description": "Shared Logger configurations for Node.js projects",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "keywords": [
+    "logger",
+    "winston",
+    "typescript",
+    "config",
+    "tsconfig",
+    "prettier",
+    "react",
+    "nextjs",
+    "node",
+    "shared-config"
+  ],
+  "author": "Anwar <anwarkamal1434@gmail.com>",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/org-utils/configs.git"
+  },
+  "homepage": "https://github.com/org-utils/configs#readme",
+  "bugs": {
+    "url": "https://github.com/org-utils/configs/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "winston": "^3.19.0",
+    "winston-daily-rotate-file": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "@types/winston": "^2.4.4",
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "winston": "^3.19.0",
+    "winston-daily-rotate-file": "^5.0.0"
+  },
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint src/**/*.ts",
+    "format": "prettier --write 'src/**/*.ts'",
+    "prepublishOnly": "npm run build"
+  }
+}
