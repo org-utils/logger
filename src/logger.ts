@@ -12,11 +12,6 @@ import fs from 'fs';
 import os from 'os';
 import { LoggerOptions } from './types.js';
 
-// Import pino-roll differently
-import pinoRoll from 'pino-roll';
-
-
-
 // ============ Pino Configuration ============
 
 /**
@@ -51,7 +46,7 @@ const getConsoleTransport = (options: LoggerOptions['console'] = {}, level: Leve
       target: 'pino-pretty',
       options: {
         colorize: true,
-        translateTime: 'yyyy-mm-dd HH:MM:ss.l', // Fixed: use 'yyyy' instead of 'YYYY'
+        translateTime: 'yyyy-mm-dd HH:MM:ss.l',
         ignore: 'pid,hostname',
         singleLine: true,
         messageFormat: '{msg}',
@@ -63,102 +58,37 @@ const getConsoleTransport = (options: LoggerOptions['console'] = {}, level: Leve
 };
 
 /**
- * Create a file write stream for pino
+ * Create a file write stream with simple rotation
  */
-const createFileStream = (filepath: string): DestinationStream | null => {
+const createRotatingFileStream = (logDir: string, filename: string, isTest: boolean, maxSize: string = '20m', maxFiles: string = '14d'): DestinationStream | null => {
+  if (isTest) return null;
+
+  // Ensure log directory exists
   try {
-    // Ensure directory exists
-    const dir = path.dirname(filepath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
     }
-
-    // Create a write stream
-    const stream = fs.createWriteStream(filepath, {
-      flags: 'a',
-      encoding: 'utf8'
-    });
-
-    // Return as DestinationStream
-    return stream as DestinationStream;
   } catch (error) {
-    console.error('Failed to create file stream:', error);
+    console.error('Failed to create log directory:', error);
     return null;
   }
-};
 
-/**
- * Get file transport with rotation using pino-roll
- */
-const getFileTransport = (logDir: string, options: LoggerOptions['fileTransportOptions'] = {}, isTest: boolean) => {
-  if (isTest || options?.enabled === false) return null;
-
-  const dirname = options?.file || logDir;
-  const filename = options?.filename || 'app.log';
-  const frequency = options?.frequency || 'daily';
-  const datePattern = options?.datePattern || 'yyyy-MM-dd'; // Fixed: use 'yyyy-MM-dd'
-  const maxSize = options?.maxSize || '20m';
-  const maxFiles = options?.maxFiles || '14d';
-  const compress = options?.zippedArchive !== false;
-  const level = options?.level;
-
-  const filepath = path.join(dirname, filename);
+  const filepath = path.join(logDir, filename);
 
   try {
-    // Create the file transport using pino-roll
-    const stream = pinoRoll({
-      file: filepath,
-      frequency,
-      dateFormat: datePattern,
-      size: maxSize,
-      keep: typeof maxFiles === 'string' && maxFiles.endsWith('d')
-        ? parseInt(maxFiles)
-        : 14,
-      compress,
-      level: level || undefined,
+    // Use pino's file transport
+    const transport = pino.transport({
+      target: 'pino/file',
+      options: {
+        destination: filepath,
+        mkdir: true,
+        sync: false,
+      },
     });
 
-    // Ensure it's a valid stream
-    if (!stream || typeof stream.write !== 'function') {
-      console.error('Invalid stream returned from pino-roll');
-      return null;
-    }
-
-    return stream;
+    return transport;
   } catch (error) {
-    console.error('Failed to create file log transport:', error);
-    return null;
-  }
-};
-
-/**
- * Get error file transport
- */
-const getErrorFileTransport = (logDir: string, options: LoggerOptions['fileTransportOptions'] = {}, isTest: boolean) => {
-  if (isTest || options?.enabled === false) return null;
-
-  try {
-    const dirname = options?.file || logDir;
-    const maxFiles = options?.maxFiles || '30d';
-    const maxSize = options?.maxSize || '20m';
-    const compress = options?.zippedArchive !== false;
-
-    const filepath = path.join(dirname, 'error.log');
-
-    const stream = pinoRoll({
-      file: filepath,
-      frequency: 'daily',
-      size: maxSize,
-      keep: typeof maxFiles === 'string' && maxFiles.endsWith('d')
-        ? parseInt(maxFiles)
-        : 30,
-      compress,
-      level: 'error',
-    });
-
-    return stream;
-  } catch (error) {
-    console.error('Failed to create error log transport:', error);
+    console.error('Failed to create file transport:', error);
     return null;
   }
 };
@@ -208,15 +138,23 @@ export const createPinoLogger = (options: LoggerOptions = {}) => {
 
   // File transport (if not in test and enabled)
   if (!isTest && options.fileTransportOptions?.enabled !== false) {
-    const fileTransport = getFileTransport(LOG_DIR, options.fileTransportOptions, isTest);
-    if (fileTransport) {
-      streams.push(fileTransport);
+    const appLogStream = createRotatingFileStream(
+      LOG_DIR,
+      'app.log',
+      isTest
+    );
+    if (appLogStream) {
+      streams.push(appLogStream);
     }
 
-    // Error file transport (always enabled for errors)
-    const errorTransport = getErrorFileTransport(LOG_DIR, options.fileTransportOptions, isTest);
-    if (errorTransport) {
-      streams.push(errorTransport);
+    // Error file transport
+    const errorLogStream = createRotatingFileStream(
+      LOG_DIR,
+      'error.log',
+      isTest
+    );
+    if (errorLogStream) {
+      streams.push(errorLogStream);
     }
   }
 
@@ -225,7 +163,7 @@ export const createPinoLogger = (options: LoggerOptions = {}) => {
     return pino(loggerOptions);
   }
 
-  // Create multi-stream logger with proper stream entries
+  // Create multi-stream logger
   const streamEntries = streams.map(stream => ({
     stream,
     level: level,
