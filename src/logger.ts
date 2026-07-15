@@ -169,7 +169,23 @@ export const createPinoLogger = (options: LoggerOptions = {}) => {
     level: level,
   }));
 
-  return pino(loggerOptions, pino.multistream(streamEntries));
+  const logger = pino(loggerOptions, pino.multistream(streamEntries));
+  // Manually flush on exit
+  process.once('exit', () => {
+    logger.flush();
+  });
+
+  // For SIGINT/SIGTERM, use once instead of on
+  process.once('SIGINT', () => {
+    logger.flush();
+    process.exit(0);
+  });
+
+  process.once('SIGTERM', () => {
+    logger.flush();
+    process.exit(0);
+  });
+  return logger
 };
 
 // ============ Logger Wrapper Class ============
