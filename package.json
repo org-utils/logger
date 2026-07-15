@@ -21,11 +21,11 @@
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "https://github.com/org-utils/configs.git"
+    "url": "https://github.com/org-utils/logger.git"
   },
-  "homepage": "https://github.com/org-utils/configs#readme",
+  "homepage": "https://github.com/org-utils/logger#readme",
   "bugs": {
-    "url": "https://github.com/org-utils/configs/issues"
+    "url": "https://github.com/org-utils/logger/issues"
   },
   "publishConfig": {
     "access": "public",
