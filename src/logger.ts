@@ -9,6 +9,8 @@ import pino, {
 import pinoRoll from 'pino-roll';
 import path from 'path';
 import fs from 'fs';
+import os from 'os'; // Add this import
+
 import { LoggerOptions } from './types.js';
 
 
@@ -152,7 +154,7 @@ export const createPinoLogger = (options: LoggerOptions = {}) => {
     base: {
       service,
       pid: process.pid,
-      hostname: require('os').hostname(),
+      hostname: os.hostname(),
       environment,
       ...options.defaultMeta,
     },
