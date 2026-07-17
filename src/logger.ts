@@ -313,19 +313,19 @@ export function createServiceLogger(service: string, options: LoggerOptions = {}
   return new Logger({ ...options, service });
 }
 
-/**
- * Create a logger with request context
- */
-export function createRequestLogger(req: any, logger: Logger): Logger {
-  const reqId = req.id || req.headers?.['x-request-id'] || generateRequestId();
-  return logger.child({
-    reqId,
-    reqMethod: req.method,
-    reqUrl: req.url,
-    reqIp: req.ip || req.headers?.['x-forwarded-for'] || req.connection?.remoteAddress,
-    reqUserAgent: req.headers?.['user-agent'],
-  });
-}
+// /**
+//  * Create a logger with request context
+//  */
+// export function createRequestLogger(req: any, logger: Logger): Logger {
+//   const reqId = req.id || req.headers?.['x-request-id'] || generateRequestId();
+//   return logger.child({
+//     reqId,
+//     reqMethod: req.method,
+//     reqUrl: req.url,
+//     reqIp: req.ip || req.headers?.['x-forwarded-for'] || req.connection?.remoteAddress,
+//     reqUserAgent: req.headers?.['user-agent'],
+//   });
+// }
 
 function generateRequestId(): string {
   return `${Date.now()}-${Math.random().toString(36).substring(2, 10)}`;
